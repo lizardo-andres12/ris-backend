@@ -8,7 +8,7 @@ CREATE TABLE images (
     product_url TEXT NOT NULL,
     product_name TEXT NOT NULL,
     product_seller TEXT,
-    product_price NUMERIC(10, 2)
+    product_price NUMERIC(10, 2),
 
     file_name TEXT NOT NULL,
     file_size INT,
@@ -16,8 +16,8 @@ CREATE TABLE images (
     width INT NOT NULL,
     format TEXT NOT NULL,
 
-    created_at TIMESTAMPZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Set timestamp to update to current on update queries
@@ -34,5 +34,5 @@ BEFORE UPDATE ON images
 FOR EACH ROW
 EXECUTE PROCEDURE trigger_set_timestamp();
 
-CREATE INDEX ON images USING hsnw (embedding vector_cosine_ops);
+CREATE INDEX ON images USING hnsw (embedding vector_cosine_ops);
 
