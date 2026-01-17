@@ -10,12 +10,13 @@ import (
 
 const (
 	similarityQuery = `SELECT id, domain_url, product_url, product_name, product_seller, product_price, file_name, 
-file_size, height, width, format 1 - (embedding <=> $1) AS cosine_similarity FROM images ORDER BY 
+file_size, height, width, format, 1 - (embedding <=> $1) AS cosine_similarity FROM images ORDER BY 
 cosine_similarity DESC LIMIT $2 OFFSET $3`
 )
 
 // Interface for image table database operations
 type ImageRepository interface {
+	// QuerySimilar returns a slice of images similar to the input embedding ordered from most similar to least similar
 	QuerySimilar(ctx context.Context, embedding []float32, limit, offset int) ([]*models.Image, error)
 }
 
@@ -31,7 +32,6 @@ func NewImageRepository(db *sql.DB) ImageRepository {
 }
 
 
-// QuerySimilar returns a slice of images similar to the input embedding ordered from most similar to least similar
 func (ir *imageRepository) QuerySimilar(ctx context.Context, embedding []float32, limit, offset int) ([]*models.Image, error) {
 	stmt, err := ir.db.PrepareContext(ctx, similarityQuery)
 	if err != nil {
@@ -49,7 +49,7 @@ func (ir *imageRepository) QuerySimilar(ctx context.Context, embedding []float32
 	images := make([]*models.Image, limit, 0)
 	for rows.Next() {
 		var image models.Image
-		if err := rows.Scan(&image.ID, &image.DomainURL, &image.ProductURL, &image.ProductName, &image.ProductSeller, &image.ProductPrice, &image.Filename, &image.Filesize, &image.Height, &image.Width); err != nil {
+		if err := rows.Scan(&image.ID, &image.DomainURL, &image.ProductURL, &image.ProductName, &image.ProductSeller, &image.ProductPrice, &image.Filename, &image.Filesize, &image.Height, &image.Width, &image.Format, &image.Similarity); err != nil {
 			return nil, err
 		}
 		images = append(images, &image)
