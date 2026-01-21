@@ -3,85 +3,132 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"ris.com/internal"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"ris.com/internal/controller"
+	"ris.com/internal/database"
 	"ris.com/internal/gateway"
 	"ris.com/internal/handlers"
+	"ris.com/internal/http/client"
+	"ris.com/internal/otel"
 	"ris.com/internal/repository"
 )
 
-func getServer() *http.Server {
-	db, err := internal.ConnectDB()
+func main() {
+	var shutdownHooks []func(context.Context) error
+	startupCtx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
+	defer cancel()
+
+	resource, err := otel.NewResource()
 	if err != nil {
-		log.Fatalf("Failed to connect to db: %v", err)
+		panic(err)
 	}
+	log.Println("hello")
 
-	client := getClient()
+	logExporter, err := otel.NewLogExporter()
+	if err != nil {
+		panic(err)
+	}
+	log.Println("hello")
 
-	ir := repository.NewImageRepository(db)
-	eg := gateway.NewEmbeddingGateway(client)
-	sc := controller.NewSearchController(ir, eg)
-	ssh := handlers.NewSearchSimilarHandler(sc)
+	metricExporter, err := otel.NewMetricExporter()
+	if err != nil {
+		panic(err)
+	}
+	log.Println("nye")
+
+	traceExporter, err := otel.NewTraceExporter()
+	if err != nil {
+		panic(err)
+	}
+	log.Println("hello")
+
+	db, err := database.NewDB(startupCtx)
+	if err != nil {
+		panic(err)
+	}
+	log.Println("hello")
+
+	log.Println("Creating logger provider...")
+	lp := otel.NewLoggerProvider(resource, logExporter)
+	shutdownHooks = append(shutdownHooks, lp.Shutdown)
+	log.Println("bye")
+
+	log.Println("Creating metric provider...")
+	mp := otel.NewMetricProvider(resource, metricExporter)
+	shutdownHooks = append(shutdownHooks, mp.Shutdown)
+	log.Println("hello")
+
+	log.Println("Creating trace provider...")
+	tp := otel.NewTraceProvider(resource, traceExporter)
+	shutdownHooks = append(shutdownHooks, tp.Shutdown)
+	log.Println("hello")
+
+	httpClient := client.NewHTTPClient(client.NewHTTPClientTransport())
+
+	embeddingGateway := gateway.NewEmbeddingGateway(httpClient)
+	imageRepository := repository.NewImageRepository(db)
+	searchController := controller.NewSearchController(imageRepository, embeddingGateway)
+	searchSimilarHandlerV1 := otelhttp.NewHandler(handlers.NewSearchSimilarHandler(searchController), "/")
+	log.Println("bye")
+
+	log.Println("About to create otelslog.NewLogger...")
+	logger := otelslog.NewLogger("search")
+	log.Println("xyz")
+	
+	slog.SetDefault(logger)
+	log.SetOutput(os.Stderr) // eliminate circular log dependency error
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/searchSimilar", ssh)
+	mux.Handle("/api/v1/searchSimilar", searchSimilarHandlerV1)
+
 
 	server := &http.Server{
 		Addr: ":8080",
 		Handler: mux,
 	}
-	return server
-}
-
-func getClient() *http.Client {
-	transportConfig := &http.Transport{
-		MaxIdleConns: 100,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout: 90 * time.Second,
-		DisableCompression: false,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: transportConfig,
-	}
-	return client
-}
-
-func main() {
-	server := getServer()
-
-	_ = context.Background()
-
-	// sc.SearchSimilar(ctx, nil, 5, 0)
+	shutdownHooks = append(shutdownHooks, server.Shutdown)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		log.Println("Starting server on port 8080")
+		logger.Info("Starting server on port 8080")
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("HTTP Server error: %v", err)
+			logger.Error(fmt.Sprintf("HTTP Server error: %v", err))
 		}
-		log.Println("Stopped server")
+		logger.Info("Stopped server")
 	}()
 
 	<-stop // blocks until stop os.Interrupt or syscall.SIGTERM is sent to process
-	log.Println("Attempting server shutdown...")
+	logger.Info("Attempting server shutdown...")
+	
+	if err := handleShutdownHooks(shutdownHooks); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+	logger.Info("Goodbye")
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
+func handleShutdownHooks(shutdownHooks []func(context.Context) error) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Forced shutdown: %v", err)
+	var errs error
+	for _, shutdownHook := range shutdownHooks {
+		if err := shutdownHook(shutdownCtx); err != nil {
+			errors.Join(errs, err)
+		}
 	}
+	return errs
 }
 
