@@ -1,0 +1,42 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: pgvector-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: images
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:Z
+      - pgdata:/var/lib/postgresql/data
+
+      
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    container_name: jaeger
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: otel-collector
+    volumes:
+      - ./config/otel-collector-config.yaml:/etc/otelcol/config.yaml:Z
+    ports:
+      - "4319:4317"
+      - "4320:4318"
+      - "13133:13133"
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
